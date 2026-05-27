@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FocusGuard 🛡️ | スマホやりすぎ防止＆スケジュール連携</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+    <!-- 背景用の光効果 -->
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+
+    <!-- アプリ全体のコンテナ -->
+    <div class="app-container">
+        
+        <!-- ヘッダーエリア -->
+        <header class="app-header">
+            <div class="logo">
+                <i class="fa-solid fa-shield-halved logo-icon"></i>
+                <h1>Focus<span>Guard</span></h1>
+            </div>
+            
+            <!-- 通知ステータスボタン -->
+            <button id="btn-notification-setup" class="btn btn-neon-alert">
+                <i class="fa-solid fa-bell"></i> 通知を有効化
+            </button>
+        </header>
+
+        <!-- メインコンテンツエリア (SPA タブ) -->
+        <main class="app-main">
+            
+            <!-- 1. トラッカーセクション (初期アクティブ) -->
+            <section id="section-tracker" class="tab-content active">
+                <div class="section-title">
+                    <h2><i class="fa-solid fa-hourglass-half"></i> 使用時間トラッカー</h2>
+                    <p>ゲームやSNSを開始する前にタイマーを設定し、やりすぎを防ぎましょう。</p>
+                </div>
+
+                <div class="tracker-layout">
+                    <!-- コントロールパネル -->
+                    <div class="card glass tracker-controls">
+                        <h3><i class="fa-solid fa-gamepad"></i> アクティビティ選択</h3>
+                        <div class="form-group">
+                            <label for="select-activity">アプリの種類</label>
+                            <div class="select-wrapper">
+                                <select id="select-activity">
+                                    <option value="game_genshin" data-icon="fa-gamepad">🎮 ゲーム (RPG/原神など)</option>
+                                    <option value="game_casual" data-icon="fa-puzzle-piece">🧩 ゲーム (パズル/カジュアル)</option>
+                                    <option value="sns_twitter" data-icon="fa-brands fa-x-twitter">🐦 SNS (X / Twitter)</option>
+                                    <option value="sns_instagram" data-icon="fa-brands fa-instagram">📸 SNS (Instagram)</option>
+                                    <option value="sns_youtube" data-icon="fa-brands fa-youtube">📺 動画 (YouTube/TikTok)</option>
+                                    <option value="sns_other" data-icon="fa-solid fa-hashtag">💬 その他SNS/ネットサーフィン</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="input-limit-time">制限時間の設定</label>
+                            <div class="time-presets">
+                                <button type="button" class="btn-preset" data-value="1">1分 (テスト用)</button>
+                                <button type="button" class="btn-preset" data-value="5">5分</button>
+                                <button type="button" class="btn-preset active" data-value="15">15分</button>
+                                <button type="button" class="btn-preset" data-value="30">30分</button>
+                                <button type="button" class="btn-preset" data-value="60">60分</button>
+                            </div>
+                            <div class="custom-time-input">
+                                <input type="number" id="input-limit-time" value="15" min="1" max="180">
+                                <span>分</span>
+                            </div>
+                        </div>
+
+                        <div class="tracker-actions">
+                            <button id="btn-start-tracker" class="btn btn-primary btn-block">
+                                <i class="fa-solid fa-play"></i> 監視を開始する
+                            </button>
+                            <button id="btn-stop-tracker" class="btn btn-secondary btn-block hidden">
+                                <i class="fa-solid fa-pause"></i> 一時停止
+                            </button>
+                            <button id="btn-reset-tracker" class="btn btn-outline btn-block hidden">
+                                <i class="fa-solid fa-rotate-left"></i> 終了・リセット
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- ビジュアルタイマー表示 -->
+                    <div class="card glass tracker-display">
+                        <div class="timer-circle-container">
+                            <svg class="timer-svg" viewBox="0 0 200 200">
+                                <circle class="timer-bg" cx="100" cy="100" r="85"></circle>
+                                <circle id="timer-progress" class="timer-progress" cx="100" cy="100" r="85"></circle>
+                            </svg>
+                            <div class="timer-text-container">
+                                <div id="timer-label" class="timer-label">STANDBY</div>
+                                <div id="timer-time" class="timer-time">15:00</div>
+                                <div id="timer-percentage" class="timer-percentage">0%</div>
+                            </div>
+                        </div>
+                        
+                        <!-- 警告プレビュー用のミニバッジ -->
+                        <div id="tracker-status-badge" class="badge-status hidden">
+                            <i class="fa-solid fa-circle-exclamation"></i> 監視中
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. スケジュールセクション -->
+            <section id="section-schedule" class="tab-content">
+                <div class="section-title">
+                    <h2><i class="fa-solid fa-calendar-days"></i> スケジュール管理</h2>
+                    <p>今日の予定を登録しておくと、時間が近づいた際にリマインド通知を行います。</p>
+                </div>
+
+                <div class="schedule-layout">
+                    <!-- 予定追加フォーム -->
+                    <div class="card glass schedule-form-card">
+                        <h3><i class="fa-solid fa-plus"></i> 新しい予定を追加</h3>
+                        <form id="form-add-schedule">
+                            <div class="form-group">
+                                <label for="schedule-title">予定の名称 <span class="required">*</span></label>
+                                <input type="text" id="schedule-title" placeholder="例: 晩ご飯の準備、オンラインミーティング" required>
+                            </div>
+                            
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="schedule-time">予定時刻 <span class="required">*</span></label>
+                                    <input type="datetime-local" id="schedule-time" required>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="schedule-priority">優先度</label>
+                                    <select id="schedule-priority">
+                                        <option value="low">🟢 低 (軽いリマインド)</option>
+                                        <option value="medium" selected>🟡 中 (通常予定)</option>
+                                        <option value="high">🔴 高 (絶対に遅れられない)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="schedule-reminder">事前リマインダー通知</label>
+                                <select id="schedule-reminder">
+                                    <option value="1">1分前 (テスト用)</option>
+                                    <option value="5" selected>5分前</option>
+                                    <option value="10">10分前</option>
+                                    <option value="30">30分前</option>
+                                    <option value="0">予定時刻のみ</option>
+                                </select>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-block">
+                                <i class="fa-solid fa-check"></i> 予定を保存する
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- 予定リスト -->
+                    <div class="card glass schedule-list-card">
+                        <h3><i class="fa-solid fa-list-check"></i> 予定一覧</h3>
+                        <div class="schedule-filter">
+                            <button class="btn-filter active" data-filter="all">すべて</button>
+                            <button class="btn-filter" data-filter="upcoming">これからの予定</button>
+                            <button class="btn-filter" data-filter="past">終了した予定</button>
+                        </div>
+                        
+                        <div id="schedule-list" class="schedule-list">
+                            <!-- JSで動的に追加されます -->
+                            <div class="empty-state">
+                                <i class="fa-regular fa-calendar-plus"></i>
+                                <p>予定が登録されていません。左のフォームから追加してください。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3. 統計ダッシュボードセクション -->
+            <section id="section-stats" class="tab-content">
+                <div class="section-title">
+                    <h2><i class="fa-solid fa-chart-pie"></i> 使用統計ダッシュボード</h2>
+                    <p>今日のあなたのスマートフォン（アプリ）使用傾向を視覚化します。</p>
+                </div>
+
+                <div class="stats-grid">
+                    <!-- サマリーカード -->
+                    <div class="card glass stats-summary-card">
+                        <h3><i class="fa-solid fa-clock"></i> 本日の総利用時間</h3>
+                        <div class="total-time-display">
+                            <span id="total-time-hours">00</span><small>時間</small>
+                            <span id="total-time-minutes">00</span><small>分</small>
+                            <span id="total-time-seconds">00</span><small>秒</small>
+                        </div>
+                        <div class="stats-meta">
+                            <span id="stat-alert-count" class="badge bg-danger"><i class="fa-solid fa-triangle-exclamation"></i> 警告発生: 0回</span>
+                            <span id="stat-success-count" class="badge bg-success"><i class="fa-solid fa-square-check"></i> 予定遵守率: 0%</span>
+                        </div>
+                    </div>
+
+                    <!-- 円グラフ (CSSで描画する簡易メーター/プログレスバー) -->
+                    <div class="card glass stats-breakdown-card">
+                        <h3><i class="fa-solid fa-chart-bar"></i> アプリ別利用内訳</h3>
+                        <div id="activity-breakdown-list" class="breakdown-list">
+                            <!-- 動的にバーを表示 -->
+                            <div class="empty-state">
+                                <i class="fa-solid fa-chart-line"></i>
+                                <p>本日の利用データはありません。</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 警告・イベントログ -->
+                    <div class="card glass stats-log-card">
+                        <h3><i class="fa-solid fa-history"></i> フォーカス・警告履歴</h3>
+                        <div id="log-list" class="log-list">
+                            <!-- 動的に追加 -->
+                            <div class="empty-state">
+                                <i class="fa-solid fa-list"></i>
+                                <p>イベントログはありません。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- フッター・ナビゲーション (スマホ対応) -->
+        <nav class="app-nav">
+            <button class="nav-item active" data-target="section-tracker">
+                <i class="fa-solid fa-hourglass-half"></i>
+                <span>トラッカー</span>
+            </button>
+            <button class="nav-item" data-target="section-schedule">
+                <i class="fa-solid fa-calendar-days"></i>
+                <span>スケジュール</span>
+            </button>
+            <button class="nav-item" data-target="section-stats">
+                <i class="fa-solid fa-chart-pie"></i>
+                <span>ダッシュボード</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- =============== モーダル: やりすぎ＆スケジュール超強力警告 =============== -->
+    <div id="alert-modal" class="modal-backdrop hidden">
+        <div class="modal-content warning-pulse-border">
+            <div class="modal-header">
+                <div class="warning-icon-container">
+                    <i class="fa-solid fa-triangle-exclamation warning-icon-main"></i>
+                </div>
+                <h2 id="modal-alert-title">過剰利用警告！</h2>
+            </div>
+            
+            <div class="modal-body">
+                <p id="modal-alert-message">設定時間を超過しました！今すぐスマートフォンでの作業やゲームを中断してください。</p>
+                
+                <!-- スケジュール割り込み時の予定情報 -->
+                <div id="modal-schedule-info" class="schedule-alert-box hidden">
+                    <div class="box-title"><i class="fa-solid fa-calendar-check"></i> 予定時刻が迫っています！</div>
+                    <div class="schedule-details">
+                        <span id="modal-schedule-name">晩ご飯の準備</span>
+                        <span id="modal-schedule-time" class="time-tag">19:00 (あと5分後)</span>
+                    </div>
+                    <p class="box-desc">ゲームやSNSをすぐに終了し、次の予定の準備をしてください。</p>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button id="btn-modal-snooze" class="btn btn-warning hidden">
+                    <i class="fa-solid fa-bed"></i> 1分だけ延長する (スヌーズ)
+                </button>
+                <button id="btn-modal-close" class="btn btn-danger">
+                    <i class="fa-solid fa-power-off"></i> アプリを終了して完了
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- アプリケーションロジック -->
+    <script src="app.js"></script>
+</body>
+</html>
