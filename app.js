@@ -25,6 +25,12 @@ const AppState = {
         schedulesMet: 0,
         activityUsage: {} // 例: { game_genshin: 120, sns_twitter: 45 }
     },
+    // 診断関連
+    diagnosis: {
+        currentQuestionIdx: 0,
+        scores: [],
+        history: []
+    },
     // イベントログ
     logs: [],
     // 音響関連
@@ -36,7 +42,8 @@ const AppState = {
 const STORAGE_KEYS = {
     SCHEDULES: 'focusguard_schedules',
     STATS: 'focusguard_stats',
-    LOGS: 'focusguard_logs'
+    LOGS: 'focusguard_logs',
+    DIAG_HISTORY: 'focusguard_diag_history'
 };
 
 const ACTIVITY_LABELS = {
@@ -78,6 +85,7 @@ function initApp() {
     renderSchedules();
     updateStatsUI();
     renderStatsCharts();
+    renderDiagHistory();
     renderLogs();
     
     addLog('system', 'FocusGuard が正常に起動しました 🛡️');
@@ -102,6 +110,11 @@ function loadData() {
         if (storedLogs) {
             AppState.logs = JSON.parse(storedLogs);
         }
+
+        const storedDiagHistory = localStorage.getItem(STORAGE_KEYS.DIAG_HISTORY);
+        if (storedDiagHistory) {
+            AppState.diagnosis.history = JSON.parse(storedDiagHistory);
+        }
     } catch (e) {
         console.error('データの読み込み中にエラーが発生しました', e);
         resetStats();
@@ -113,6 +126,7 @@ function saveData() {
         localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(AppState.schedules));
         localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(AppState.stats));
         localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(AppState.logs));
+        localStorage.setItem(STORAGE_KEYS.DIAG_HISTORY, JSON.stringify(AppState.diagnosis.history));
     } catch (e) {
         console.error('データの保存中にエラーが発生しました', e);
     }
@@ -196,6 +210,7 @@ function setupEventListeners() {
             // 統計画面を開いたときは再描画してアニメーションをトリガーする
             if (targetId === 'section-stats') {
                 renderStatsCharts();
+                renderDiagHistory();
             }
         });
     });
@@ -261,6 +276,86 @@ function setupEventListeners() {
     
     btnModalClose.addEventListener('click', closeModal);
     btnModalSnooze.addEventListener('click', snoozeTrackerAlert);
+
+    // 8. 診断機能操作
+    const btnStartDiag = document.getElementById('btn-start-diag');
+    if (btnStartDiag) {
+        btnStartDiag.addEventListener('click', startDiagnosis);
+    }
+
+    const btnDiagAnswers = document.querySelectorAll('.btn-diag-ans');
+    btnDiagAnswers.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const score = parseInt(btn.getAttribute('data-score'));
+            handleDiagnosisAnswer(score);
+        });
+    });
+
+    const btnRestartDiag = document.getElementById('btn-restart-diag');
+    if (btnRestartDiag) {
+        btnRestartDiag.addEventListener('click', resetDiagnosis);
+    }
+
+    const btnAutoTracker = document.getElementById('btn-auto-tracker');
+    if (btnAutoTracker) {
+        btnAutoTracker.addEventListener('click', () => {
+            const history = AppState.diagnosis.history;
+            if (history.length === 0) return;
+            
+            const lastDiag = history[0];
+            let limitMins = 15;
+            if (lastDiag.score >= 20) {
+                limitMins = 15;
+            } else if (lastDiag.score >= 10) {
+                limitMins = 30;
+            } else {
+                limitMins = 60;
+            }
+            
+            let activity = 'sns_other';
+            if (lastDiag.type && lastDiag.type.includes('SNS')) {
+                activity = 'sns_twitter';
+            } else if (lastDiag.type && lastDiag.type.includes('ゲーム')) {
+                activity = 'game_genshin';
+            }
+            
+            const selectActivity = document.getElementById('select-activity');
+            const inputLimitTime = document.getElementById('input-limit-time');
+            if (selectActivity) selectActivity.value = activity;
+            if (inputLimitTime) {
+                inputLimitTime.value = limitMins;
+                // プリセットボタンのアクティブ表示を更新するために時間表示をリフレッシュ
+                const presetButtons = document.querySelectorAll('.btn-preset');
+                presetButtons.forEach(b => {
+                    if (parseInt(b.getAttribute('data-value')) === limitMins) {
+                        b.classList.add('active');
+                    } else {
+                        b.classList.remove('active');
+                    }
+                });
+                updateTimerDisplay(limitMins * 60, limitMins * 60);
+            }
+            
+            resetTracker();
+            startTracker();
+            
+            const trackerTabItem = document.querySelector('.nav-item[data-target="section-tracker"]');
+            if (trackerTabItem) {
+                trackerTabItem.click();
+            }
+        });
+    }
+
+    const btnGoTracker = document.getElementById('btn-go-tracker');
+    if (btnGoTracker) {
+        btnGoTracker.addEventListener('click', () => {
+            // トラッカータブへ移動
+            const trackerTabItem = document.querySelector('.nav-item[data-target="section-tracker"]');
+            if (trackerTabItem) {
+                trackerTabItem.click();
+            }
+        });
+    }
 }
 
 // --- Web Notification API (通知) ---
@@ -1016,4 +1111,301 @@ function escapeHtml(str) {
         };
         return chars[tag] || tag;
     });
+}
+
+// --- 診断機能用 質問データ＆ロジック ---
+const DIAG_QUESTIONS = [
+    "朝起きてすぐにスマートフォンをチェック（通知やSNS等を確認）しますか？",
+    "スマホが手元にないとき、または電波がないときに不安やイライラを感じますか？",
+    "食事中や、家族・友人との会話中にもスマホを触ってしまいますか？",
+    "スマホの使いすぎが原因で、睡眠不足になったり翌朝起きるのが辛かったりしますか？",
+    "スマホの使用時間を減らそうと決心しても、失敗してしまうことがありますか？",
+    "勉強、仕事、家事などのやるべきことよりスマホを優先してしまうことがありますか？",
+    "歩きスマホや、お風呂に入りながらのスマホ利用が習慣化していますか？",
+    "スマホを使い始めると、気がついたらあっという間に数時間が経っていて驚くことがありますか？",
+    "通知音が鳴っていないのに、鳴ったような気がして頻繁にスマホの画面を確認しますか？",
+    "「スマホの使いすぎ」について、家族や周囲から注意されたり非難されたりしたことがありますか？"
+];
+
+function startDiagnosis() {
+    initAudioContext();
+    AppState.diagnosis.currentQuestionIdx = 0;
+    AppState.diagnosis.scores = [];
+    
+    // UIの切り替え
+    document.getElementById('diag-intro-card').classList.add('hidden');
+    document.getElementById('diag-result-card').classList.add('hidden');
+    document.getElementById('diag-question-card').classList.remove('hidden');
+    
+    renderDiagnosisQuestion();
+    playBeepSound(700, 0.1, 'sine');
+}
+
+function renderDiagnosisQuestion() {
+    const idx = AppState.diagnosis.currentQuestionIdx;
+    const total = DIAG_QUESTIONS.length;
+    
+    // 質問文の更新
+    document.getElementById('diag-question-text').textContent = `${idx + 1}. ${DIAG_QUESTIONS[idx]}`;
+    
+    // 進捗表示の更新
+    document.getElementById('diag-progress-text').textContent = `質問 ${idx + 1} / ${total}`;
+    
+    const percent = Math.round(((idx + 1) / total) * 100);
+    document.getElementById('diag-percent-text').textContent = `${percent}%`;
+    document.getElementById('diag-progress-bar').style.width = `${percent}%`;
+}
+
+function handleDiagnosisAnswer(score) {
+    AppState.diagnosis.scores.push(score);
+    playBeepSound(800, 0.05, 'sine');
+    
+    AppState.diagnosis.currentQuestionIdx++;
+    
+    if (AppState.diagnosis.currentQuestionIdx < DIAG_QUESTIONS.length) {
+        // 次の質問へ
+        renderDiagnosisQuestion();
+    } else {
+        // 全問回答完了、結果表示へ
+        finishDiagnosis();
+    }
+}
+
+function finishDiagnosis() {
+    const totalScore = AppState.diagnosis.scores.reduce((sum, s) => sum + s, 0);
+    const scores = AppState.diagnosis.scores;
+    
+    // カテゴリ別のスコア集計
+    const snsScore = (scores[0] || 0) + (scores[2] || 0) + (scores[8] || 0);
+    const gameScore = (scores[7] || 0) + (scores[5] || 0);
+    const habitScore = (scores[6] || 0) + (scores[3] || 0) + (scores[9] || 0);
+    const mindScore = (scores[1] || 0) + (scores[4] || 0);
+
+    // 診断タイプの特定
+    let type = '健康健全タイプ';
+    if (totalScore >= 8) {
+        const categories = [
+            { name: 'SNS中毒タイプ', score: snsScore },
+            { name: 'ゲーム・動画没頭タイプ', score: gameScore },
+            { name: 'ながらスマホ（生活乱れ）タイプ', score: habitScore },
+            { name: 'スマホ不安（精神的依存）タイプ', score: mindScore }
+        ];
+        categories.sort((a, b) => b.score - a.score);
+        type = categories[0].name;
+    }
+
+    let level = '';
+    let levelClass = '';
+    let desc = '';
+    
+    // 判定基準
+    if (totalScore >= 20) {
+        level = '依存度：高 (重度の疑い)';
+        levelClass = 'diag-result-level-high';
+    } else if (totalScore >= 10) {
+        level = '依存度：中 (依存予備軍)';
+        levelClass = 'diag-result-level-medium';
+    } else {
+        level = '依存度：低 (健康的な利用)';
+        levelClass = 'diag-result-level-low';
+    }
+    
+    // タイプ別のパーソナライズアドバイスの設定
+    if (type === 'SNS中毒タイプ') {
+        desc = `あなたはSNS（X/Twitter、Instagram等）や動画サイトの通知チェック、だらだら閲覧に依存している傾向が強い「SNS中毒タイプ」です。画面を開いていないときでも「いいね」や返信、新しい投稿が気になっていませんか？\n【対策】FocusGuardの「使用時間トラッカー」でSNSアプリ利用を1回15分に制限し、タイマー終了後はスマホの通知をオフにして没頭を防ぎましょう！`;
+    } else if (type === 'ゲーム・動画没頭タイプ') {
+        desc = `あなたはゲームや長時間の動画視聴（YouTube/TikTok等）に熱中するあまり、時間を忘れてしまう「ゲーム・動画没頭タイプ」です。気がつくと数時間が経過し、本来のやるべきことや睡眠時間が削られています。\n【対策】ゲーム開始前に必ず「制限時間（30分など）」をトラッカーに設定し、強力アラートが鳴ったらすぐにアプリをタスクキルする自己ルールを徹底してください。`;
+    } else if (type === 'ながらスマホ（生活乱れ）タイプ') {
+        desc = `あなたは歩きスマホ、お風呂、食事中、会話中など、あらゆる場面でスマホが手放せない「ながらスマホ（生活乱れ）タイプ」です。生活習慣の中にスマホが入り込みすぎており、周囲の注意を引いたり安全上のリスクもあります。\n【対策】スケジュール機能を使って「食事」「入浴」などの予定を登録し、予定時刻の数分前にスマホを「通知オフ」にして手の届かない場所に置く習慣をつけましょう。`;
+    } else if (type === 'スマホ不安（精神的依存）タイプ') {
+        desc = `あなたはスマホが手元にないことに強い不安やイライラを感じる「スマホ不安（精神的依存）タイプ」です。通知の幻聴が聞こえたり、何もなくても常に画面を点灯させて確認する癖がついています。\n【対策】まずは「スマホを触らない時間（デジタルデトックス）」を1日30分から設定し、FocusGuardのスケジュールを遵守した成功体験を積み重ねて不安を克服しましょう。`;
+    } else {
+        desc = `おめでとうございます！あなたはスマホと非常に健全かつ良好な距離感を保てている「健康健全タイプ」です。依存の兆候はほとんど見られません。今後も自分のペースを維持してスマホを役立つツールとして使いこなしてください！`;
+    }
+    
+    // 結果UIの反映
+    document.getElementById('diag-result-score').textContent = totalScore;
+    const levelElement = document.getElementById('diag-result-level');
+    levelElement.textContent = level;
+    levelElement.className = levelClass;
+    
+    const typeElement = document.getElementById('diag-result-type');
+    if (typeElement) {
+        typeElement.textContent = `タイプ：${type}`;
+    }
+    
+    document.getElementById('diag-result-desc').textContent = desc;
+    
+    // 切り替え
+    document.getElementById('diag-question-card').classList.add('hidden');
+    document.getElementById('diag-result-card').classList.remove('hidden');
+    
+    // 履歴に追加
+    const now = new Date();
+    const dateStr = `${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    AppState.diagnosis.history.unshift({
+        date: dateStr,
+        score: totalScore,
+        level: level,
+        levelClass: levelClass,
+        type: type
+    });
+    
+    // 履歴の上限を10件にする
+    if (AppState.diagnosis.history.length > 10) {
+        AppState.diagnosis.history.pop();
+    }
+    
+    // ログに追記
+    addLog('success', `スマホ依存度診断を実施しました（スコア: ${totalScore}点 / ${type}）`);
+    
+    // 保存と更新
+    saveData();
+    renderDiagHistory();
+    
+    // ファンファーレ音
+    playBeepSound(500, 0.1, 'sine');
+    setTimeout(() => playBeepSound(650, 0.1, 'sine'), 100);
+    setTimeout(() => playBeepSound(800, 0.3, 'sine'), 200);
+}
+
+function resetDiagnosis() {
+    AppState.diagnosis.currentQuestionIdx = 0;
+    AppState.diagnosis.scores = [];
+    
+    document.getElementById('diag-result-card').classList.add('hidden');
+    document.getElementById('diag-question-card').classList.add('hidden');
+    document.getElementById('diag-intro-card').classList.remove('hidden');
+    
+    playBeepSound(500, 0.15, 'sine');
+}
+
+function renderDiagHistory() {
+    const list = document.getElementById('diag-history-list');
+    if (!list) return;
+    
+    const history = AppState.diagnosis.history;
+    
+    // SVG履歴グラフの再描画
+    renderDiagHistoryChart();
+    
+    if (history.length === 0) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <i class="fa-solid fa-notes-medical"></i>
+                <p>診断履歴はありません。</p>
+            </div>
+        `;
+        return;
+    }
+    
+    list.innerHTML = history.map(item => {
+        const simpleLevel = item.level.split(' ')[0]; // 「依存度：高 (重度の疑い)」 から 「依存度：高」 を抽出
+        const displayType = item.type ? ` | ${item.type.replace('タイプ', '')}` : '';
+        return `
+            <div class="diag-history-item">
+                <div class="diag-hist-info">
+                    <span class="diag-hist-level ${item.levelClass}">${escapeHtml(simpleLevel)}${escapeHtml(displayType)}</span>
+                    <span class="diag-hist-date"><i class="fa-regular fa-calendar"></i> ${item.date}</span>
+                </div>
+                <div class="diag-hist-score">${item.score} <small>点</small></div>
+            </div>
+        `;
+    }).join('');
+}
+
+// 診断スコア履歴の動的SVG折れ線グラフ描画
+function renderDiagHistoryChart() {
+    const svg = document.getElementById('diag-trend-chart');
+    if (!svg) return;
+    
+    const history = AppState.diagnosis.history;
+    // 履歴データをコピーし、時系列順（過去から現在）にするために反転（最大10件分）
+    const data = [...history].slice(0, 10).reverse();
+    
+    // データが2点未満ならグラフ表示不可のテキスト
+    if (data.length < 2) {
+        svg.innerHTML = `
+            <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="var(--text-secondary)" font-size="9" font-weight="600">
+                履歴グラフの表示には診断が2回以上必要です。
+            </text>
+        `;
+        return;
+    }
+    
+    const svgWidth = 400;
+    const svgHeight = 150;
+    const paddingLeft = 30;
+    const paddingRight = 15;
+    const paddingTop = 15;
+    const paddingBottom = 20;
+    
+    const chartWidth = svgWidth - paddingLeft - paddingRight;
+    const chartHeight = svgHeight - paddingTop - paddingBottom;
+    
+    const maxVal = 30; // 満点30点
+    const yRatio = chartHeight / maxVal;
+    const xStep = chartWidth / (data.length - 1);
+    
+    // Y軸グリッド線とラベル
+    let gridLines = '';
+    const yTicks = [0, 10, 20, 30];
+    yTicks.forEach(tick => {
+        const y = paddingTop + chartHeight - (tick * yRatio);
+        gridLines += `
+            <line class="grid-line" x1="${paddingLeft}" y1="${y}" x2="${svgWidth - paddingRight}" y2="${y}"></line>
+            <text x="${paddingLeft - 6}" y="${y + 2.5}" text-anchor="end" font-size="7">${tick}点</text>
+        `;
+    });
+    
+    // 折れ線、グラデーションエリア、ドットの構築
+    let linePoints = [];
+    let areaPoints = [];
+    let plotPoints = '';
+    let xLabels = '';
+    
+    // 最初の領域始点
+    areaPoints.push(`${paddingLeft},${paddingTop + chartHeight}`);
+    
+    data.forEach((item, idx) => {
+        const x = paddingLeft + (idx * xStep);
+        const y = paddingTop + chartHeight - (item.score * yRatio);
+        
+        linePoints.push(`${x},${y}`);
+        areaPoints.push(`${x},${y}`);
+        
+        // 最後の点の後に領域終点を追加
+        if (idx === data.length - 1) {
+            areaPoints.push(`${x},${paddingTop + chartHeight}`);
+        }
+        
+        // 横軸ラベル（日付）
+        const shortDate = item.date.split(' ')[0]; // 「6/16」
+        xLabels += `
+            <text x="${x}" y="${svgHeight - 6}" text-anchor="middle" font-size="7.5">${shortDate}</text>
+        `;
+        
+        // プロットするホバー可能ドット
+        const displayType = item.type ? ` (${item.type.replace('タイプ', '')})` : '';
+        plotPoints += `
+            <circle class="chart-point" cx="${x}" cy="${y}" r="3.5">
+                <title>${item.date}\n点数: ${item.score}点\n${item.level.split(' ')[0]}${displayType}</title>
+            </circle>
+        `;
+    });
+    
+    // SVGの中身を組み立ててレンダリング
+    svg.innerHTML = `
+        <defs>
+            <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--neon-blue)" stop-opacity="0.35"></stop>
+                <stop offset="100%" stop-color="var(--neon-blue)" stop-opacity="0.0"></stop>
+            </linearGradient>
+        </defs>
+        ${gridLines}
+        <polygon class="chart-area" points="${areaPoints.join(' ')}"></polygon>
+        <polyline class="chart-line" points="${linePoints.join(' ')}"></polyline>
+        ${plotPoints}
+        ${xLabels}
+    `;
 }

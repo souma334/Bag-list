@@ -181,6 +181,86 @@
                 </div>
             </section>
 
+            <!-- 2.5. 診断セクション -->
+            <section id="section-diagnosis" class="tab-content">
+                <div class="section-title">
+                    <h2><i class="fa-solid fa-notes-medical"></i> スマホ依存度診断</h2>
+                    <p>簡単な10の質問に答えて、あなたのスマホ依存レベルを診断しましょう。</p>
+                </div>
+
+                <div class="diagnosis-layout">
+                    <!-- 診断開始（イントロ）カード -->
+                    <div id="diag-intro-card" class="card glass diagnosis-card text-center">
+                        <div class="diag-icon-container">
+                            <i class="fa-solid fa-mobile-screen-button"></i>
+                        </div>
+                        <h3>スマホ依存度セルフチェック</h3>
+                        <p>このテストでは、スマホ依存症のスクリーニングで使用される一般的な行動パターンに基づいて、10の質問であなたの依存度を算出します。</p>
+                        <p class="diag-meta-info">所要時間: 約2分 / 全10問</p>
+                        <button id="btn-start-diag" class="btn btn-primary">
+                            <i class="fa-solid fa-play"></i> 診断を始める
+                        </button>
+                    </div>
+
+                    <!-- 質問回答カード (初期非表示) -->
+                    <div id="diag-question-card" class="card glass diagnosis-card hidden">
+                        <div class="diag-progress-container">
+                            <div class="diag-progress-header">
+                                <span id="diag-progress-text">質問 1 / 10</span>
+                                <span id="diag-percent-text">10%</span>
+                            </div>
+                            <div class="diag-progress-bar-bg">
+                                <div id="diag-progress-bar" class="diag-progress-bar" style="width: 10%;"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="diag-question-body">
+                            <h4 id="diag-question-text">ここに質問テキストが入ります。</h4>
+                            
+                            <div class="diag-answers">
+                                <button class="btn btn-outline btn-block btn-diag-ans" data-score="0">全然当てはまらない</button>
+                                <button class="btn btn-outline btn-block btn-diag-ans" data-score="1">たまにある</button>
+                                <button class="btn btn-outline btn-block btn-diag-ans" data-score="2">よくある</button>
+                                <button class="btn btn-outline btn-block btn-diag-ans" data-score="3">常に当てはまる</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 診断結果カード (初期非表示) -->
+                    <div id="diag-result-card" class="card glass diagnosis-card hidden">
+                        <h3>診断結果</h3>
+                        
+                        <div class="result-score-container">
+                            <div class="score-circle">
+                                <span id="diag-result-score">0</span>
+                                <small>/ 30 点</small>
+                            </div>
+                            <div class="result-level-box">
+                                <span class="level-label">診断ステータス</span>
+                                <h4 id="diag-result-level">依存度：低</h4>
+                                <span id="diag-result-type" class="badge-type">タイプ：健康健全</span>
+                            </div>
+                        </div>
+
+                        <div class="result-description-card">
+                            <p id="diag-result-desc">診断結果の詳細説明とアドバイスがここに入ります。</p>
+                        </div>
+
+                        <div class="result-actions">
+                            <button id="btn-restart-diag" class="btn btn-outline">
+                                <i class="fa-solid fa-rotate-left"></i> もう一度診断する
+                            </button>
+                            <button id="btn-auto-tracker" class="btn btn-primary btn-neon-pulse">
+                                <i class="fa-solid fa-shield-halved"></i> 推奨時間でタイマースタート
+                            </button>
+                            <button id="btn-go-tracker" class="btn btn-outline">
+                                <i class="fa-solid fa-hourglass-half"></i> トラッカー
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- 3. 統計ダッシュボードセクション -->
             <section id="section-stats" class="tab-content">
                 <div class="section-title">
@@ -226,6 +306,24 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- 診断履歴 -->
+                    <div class="card glass stats-diag-card">
+                        <h3><i class="fa-solid fa-notes-medical"></i> 過去の診断履歴</h3>
+                        <!-- 診断スコア推移グラフ -->
+                        <div class="diag-chart-container">
+                            <svg id="diag-trend-chart" viewBox="0 0 400 150">
+                                <!-- JSで動的に描画します -->
+                            </svg>
+                        </div>
+                        <div id="diag-history-list" class="diag-history-list">
+                            <!-- 動的に追加 -->
+                            <div class="empty-state">
+                                <i class="fa-solid fa-notes-medical"></i>
+                                <p>診断履歴はありません。</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>
@@ -239,6 +337,10 @@
             <button class="nav-item" data-target="section-schedule">
                 <i class="fa-solid fa-calendar-days"></i>
                 <span>スケジュール</span>
+            </button>
+            <button class="nav-item" data-target="section-diagnosis">
+                <i class="fa-solid fa-notes-medical"></i>
+                <span>依存度診断</span>
             </button>
             <button class="nav-item" data-target="section-stats">
                 <i class="fa-solid fa-chart-pie"></i>
