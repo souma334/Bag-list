@@ -31,6 +31,17 @@ const AppState = {
         scores: [],
         history: []
     },
+    // セキュリティ・ロック関連
+    security: {
+        passcode: '',
+        appLockEnabled: false,
+        lockScreenActive: false,
+        lockTimerEnabled: false,
+        tempInput: '',
+        setupStep: 0, // 0:設定メニュー, 1:1回目入力, 2:確認入力
+        setupTempPasscode: '',
+        onUnlockCallback: null
+    },
     // イベントログ
     logs: [],
     // 音響関連
@@ -43,7 +54,8 @@ const STORAGE_KEYS = {
     SCHEDULES: 'focusguard_schedules',
     STATS: 'focusguard_stats',
     LOGS: 'focusguard_logs',
-    DIAG_HISTORY: 'focusguard_diag_history'
+    DIAG_HISTORY: 'focusguard_diag_history',
+    SECURITY: 'focusguard_security'
 };
 
 const ACTIVITY_LABELS = {
@@ -89,6 +101,11 @@ function initApp() {
     renderLogs();
     
     addLog('system', 'FocusGuard が正常に起動しました 🛡️');
+
+    // アプリ起動時のロック認証判定
+    if (AppState.security.appLockEnabled && AppState.security.passcode) {
+        showLockScreen(null, "アプリ起動ロック");
+    }
 }
 
 // --- ローカルストレージ連携 ---
@@ -115,6 +132,11 @@ function loadData() {
         if (storedDiagHistory) {
             AppState.diagnosis.history = JSON.parse(storedDiagHistory);
         }
+
+        const storedSecurity = localStorage.getItem(STORAGE_KEYS.SECURITY);
+        if (storedSecurity) {
+            AppState.security = {...AppState.security, ...JSON.parse(storedSecurity)};
+        }
     } catch (e) {
         console.error('データの読み込み中にエラーが発生しました', e);
         resetStats();
@@ -127,6 +149,13 @@ function saveData() {
         localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(AppState.stats));
         localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(AppState.logs));
         localStorage.setItem(STORAGE_KEYS.DIAG_HISTORY, JSON.stringify(AppState.diagnosis.history));
+        
+        // 保存対象を絞る（コールバック関数等は除く）
+        const securityToSave = {
+            passcode: AppState.security.passcode,
+            appLockEnabled: AppState.security.appLockEnabled
+        };
+        localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(securityToSave));
     } catch (e) {
         console.error('データの保存中にエラーが発生しました', e);
     }
@@ -276,6 +305,77 @@ function setupEventListeners() {
     
     btnModalClose.addEventListener('click', closeModal);
     btnModalSnooze.addEventListener('click', snoozeTrackerAlert);
+
+    // 7.5 セキュリティロック操作
+    const btnLockSetup = document.getElementById('btn-lock-setup');
+    if (btnLockSetup) {
+        btnLockSetup.addEventListener('click', openLockSetupModal);
+    }
+    
+    const btnCloseLockSetup = document.getElementById('btn-close-lock-setup');
+    if (btnCloseLockSetup) {
+        btnCloseLockSetup.addEventListener('click', () => {
+            document.getElementById('lock-setup-modal').classList.add('hidden');
+        });
+    }
+
+    const toggleAppLock = document.getElementById('toggle-app-lock');
+    if (toggleAppLock) {
+        toggleAppLock.addEventListener('change', (e) => {
+            AppState.security.appLockEnabled = e.target.checked;
+            saveData();
+            addLog('system', `起動ロックを ${e.target.checked ? '有効' : '無効'} に設定しました。`);
+        });
+    }
+
+    const btnChangePasscode = document.getElementById('btn-change-passcode');
+    if (btnChangePasscode) {
+        btnChangePasscode.addEventListener('click', () => {
+            initPasscodeSetupFlow();
+        });
+    }
+
+    const btnDisablePasscode = document.getElementById('btn-disable-passcode');
+    if (btnDisablePasscode) {
+        btnDisablePasscode.addEventListener('click', () => {
+            if (confirm('ロック機能を完全に無効化しますか？（現在のパスコードは消去されます）')) {
+                disablePasscodeLock();
+            }
+        });
+    }
+
+    // テンキーのイベント登録（設定用とロック画面用）
+    document.querySelectorAll('#setup-numpad .num-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const val = btn.getAttribute('data-val');
+            handleSetupNumpadInput(val);
+        });
+    });
+
+    document.querySelectorAll('#screen-numpad .num-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const val = btn.getAttribute('data-val');
+            handleScreenNumpadInput(val);
+        });
+    });
+
+    // 緊急誓約解除
+    const btnShowBypass = document.getElementById('btn-show-bypass');
+    if (btnShowBypass) {
+        btnShowBypass.addEventListener('click', () => {
+            const bypassForm = document.getElementById('bypass-form');
+            bypassForm.classList.toggle('hidden');
+            // 入力エリアをクリア
+            document.getElementById('bypass-input').value = '';
+        });
+    }
+
+    const btnSubmitBypass = document.getElementById('btn-submit-bypass');
+    if (btnSubmitBypass) {
+        btnSubmitBypass.addEventListener('click', () => {
+            handleEmergencyBypass();
+        });
+    }
 
     // 8. 診断機能操作
     const btnStartDiag = document.getElementById('btn-start-diag');
@@ -482,6 +582,19 @@ function stopAlertSiren() {
 function startTracker() {
     initAudioContext(); // ユーザーのアクションに紐づけてオーディオ初期化
     
+    // パスコード制限チェック
+    const checkLockTimer = document.getElementById('check-lock-timer');
+    const lockEnabled = checkLockTimer ? checkLockTimer.checked : false;
+    
+    if (lockEnabled && !AppState.security.passcode) {
+        alert('タイマー解除制限をかけるには、先にパスコードを設定する必要があります。「ロック設定」からパスコードを登録してください。');
+        if (checkLockTimer) checkLockTimer.checked = false;
+        openLockSetupModal();
+        return;
+    }
+    
+    AppState.security.lockTimerEnabled = lockEnabled;
+    
     const selectActivity = document.getElementById('select-activity');
     const inputLimitTime = document.getElementById('input-limit-time');
     
@@ -502,6 +615,7 @@ function startTracker() {
     document.getElementById('select-activity').disabled = true;
     document.getElementById('input-limit-time').disabled = true;
     document.querySelectorAll('.btn-preset').forEach(b => b.disabled = true);
+    if (checkLockTimer) checkLockTimer.disabled = true;
     
     const statusBadge = document.getElementById('tracker-status-badge');
     statusBadge.classList.remove('hidden');
@@ -516,7 +630,7 @@ function startTracker() {
     updateTimerDisplay(totalSeconds, totalSeconds);
     
     // ログと開始通知
-    addLog('system', `${ACTIVITY_LABELS[activity]} の監視を開始しました。（目標：${limitMinutes}分）`);
+    addLog('system', `${ACTIVITY_LABELS[activity]} の監視を開始しました。（目標：${limitMinutes}分${lockEnabled ? '・解除制限あり' : ''}）`);
     sendNotification('FocusGuard 監視開始', {
         body: `${ACTIVITY_LABELS[activity]} の利用を開始します。制限時間は ${limitMinutes} 分です。`,
         tag: 'tracker-system'
@@ -530,80 +644,102 @@ function startTracker() {
 function togglePauseTracker() {
     if (!AppState.tracker.active) return;
     
-    const btnStop = document.getElementById('btn-stop-tracker');
-    
-    if (AppState.tracker.paused) {
-        // 再開
-        AppState.tracker.paused = false;
-        btnStop.innerHTML = '<i class="fa-solid fa-pause"></i> 一時停止';
-        btnStop.className = 'btn btn-secondary btn-block';
-        addLog('system', '監視を再開しました。');
-        playBeepSound(800, 0.1, 'sine');
+    const performToggle = () => {
+        const btnStop = document.getElementById('btn-stop-tracker');
+        
+        if (AppState.tracker.paused) {
+            // 再開
+            AppState.tracker.paused = false;
+            btnStop.innerHTML = '<i class="fa-solid fa-pause"></i> 一時停止';
+            btnStop.className = 'btn btn-secondary btn-block';
+            addLog('system', '監視を再開しました。');
+            playBeepSound(800, 0.1, 'sine');
+        } else {
+            // 一時停止
+            AppState.tracker.paused = true;
+            btnStop.innerHTML = '<i class="fa-solid fa-play"></i> 再開';
+            btnStop.className = 'btn btn-primary btn-block';
+            addLog('system', '監視を一時停止しました。');
+            playBeepSound(500, 0.1, 'sine');
+        }
+    };
+
+    if (AppState.security.lockTimerEnabled && AppState.security.passcode) {
+        showLockScreen(performToggle, "タイマーを一時停止／再開するには認証が必要です。");
     } else {
-        // 一時停止
-        AppState.tracker.paused = true;
-        btnStop.innerHTML = '<i class="fa-solid fa-play"></i> 再開';
-        btnStop.className = 'btn btn-primary btn-block';
-        addLog('system', '監視を一時停止しました。');
-        playBeepSound(500, 0.1, 'sine');
+        performToggle();
     }
 }
 
 function resetTracker() {
     if (!AppState.tracker.active) return;
     
-    // 確認ダイアログ (過剰利用警告中にリセットする場合は特になし)
-    const label = ACTIVITY_LABELS[AppState.tracker.activity];
-    const minsUsed = Math.floor(AppState.tracker.elapsedSeconds / 60);
-    const secsUsed = AppState.tracker.elapsedSeconds % 60;
-    
-    // 統計データに加算
-    AppState.stats.totalUsageSeconds += AppState.tracker.elapsedSeconds;
-    
-    const act = AppState.tracker.activity;
-    AppState.stats.activityUsage[act] = (AppState.stats.activityUsage[act] || 0) + AppState.tracker.elapsedSeconds;
-    
-    addLog('success', `${label} の利用を終了しました。（使用時間: ${minsUsed}分${secsUsed}秒）`);
-    
-    // スレッド停止
-    if (AppState.tracker.timerId) {
-        clearInterval(AppState.tracker.timerId);
-        AppState.tracker.timerId = null;
+    const performReset = () => {
+        const label = ACTIVITY_LABELS[AppState.tracker.activity];
+        const minsUsed = Math.floor(AppState.tracker.elapsedSeconds / 60);
+        const secsUsed = AppState.tracker.elapsedSeconds % 60;
+        
+        // 統計データに加算
+        AppState.stats.totalUsageSeconds += AppState.tracker.elapsedSeconds;
+        
+        const act = AppState.tracker.activity;
+        AppState.stats.activityUsage[act] = (AppState.stats.activityUsage[act] || 0) + AppState.tracker.elapsedSeconds;
+        
+        addLog('success', `${label} の利用を終了しました。（使用時間: ${minsUsed}分${secsUsed}秒）`);
+        
+        // スレッド停止
+        if (AppState.tracker.timerId) {
+            clearInterval(AppState.tracker.timerId);
+            AppState.tracker.timerId = null;
+        }
+        
+        stopAlertSiren();
+        
+        // 状態クリア
+        AppState.tracker.active = false;
+        AppState.tracker.paused = false;
+        AppState.tracker.isOvertime = false;
+        AppState.security.lockTimerEnabled = false; // 解除
+        
+        const checkLockTimer = document.getElementById('check-lock-timer');
+        if (checkLockTimer) {
+            checkLockTimer.checked = false;
+            checkLockTimer.disabled = false;
+        }
+        
+        // UI復元
+        document.getElementById('btn-start-tracker').classList.remove('hidden');
+        document.getElementById('btn-stop-tracker').classList.add('hidden');
+        document.getElementById('btn-reset-tracker').classList.add('hidden');
+        document.getElementById('select-activity').disabled = false;
+        document.getElementById('input-limit-time').disabled = false;
+        document.querySelectorAll('.btn-preset').forEach(b => b.disabled = false);
+        
+        document.getElementById('tracker-status-badge').classList.add('hidden');
+        
+        const displayCard = document.querySelector('.tracker-display');
+        displayCard.className = 'card glass tracker-display';
+        
+        document.getElementById('timer-label').textContent = 'STANDBY';
+        const limitMinutes = parseInt(document.getElementById('input-limit-time').value) || 15;
+        updateTimerDisplay(limitMinutes * 60, limitMinutes * 60);
+        
+        // モーダルや警告の削除
+        document.body.classList.remove('fullscreen-warning-flash');
+        
+        // 統計・ダッシュボードの更新
+        saveData();
+        updateStatsUI();
+        renderStatsCharts();
+        
+        playBeepSound(400, 0.3, 'sine');
+    };
+
+    if (AppState.security.lockTimerEnabled && AppState.security.passcode) {
+        showLockScreen(performReset, "監視タイマーを終了するには認証が必要です。");
+    } else {
+        performReset();
     }
-    
-    stopAlertSiren();
-    
-    // 状態クリア
-    AppState.tracker.active = false;
-    AppState.tracker.paused = false;
-    AppState.tracker.isOvertime = false;
-    
-    // UI復元
-    document.getElementById('btn-start-tracker').classList.remove('hidden');
-    document.getElementById('btn-stop-tracker').classList.add('hidden');
-    document.getElementById('btn-reset-tracker').classList.add('hidden');
-    document.getElementById('select-activity').disabled = false;
-    document.getElementById('input-limit-time').disabled = false;
-    document.querySelectorAll('.btn-preset').forEach(b => b.disabled = false);
-    
-    document.getElementById('tracker-status-badge').classList.add('hidden');
-    
-    const displayCard = document.querySelector('.tracker-display');
-    displayCard.className = 'card glass tracker-display';
-    
-    document.getElementById('timer-label').textContent = 'STANDBY';
-    const limitMinutes = parseInt(document.getElementById('input-limit-time').value) || 15;
-    updateTimerDisplay(limitMinutes * 60, limitMinutes * 60);
-    
-    // モーダルや警告の削除
-    document.body.classList.remove('fullscreen-warning-flash');
-    
-    // 統計・ダッシュボードの更新
-    saveData();
-    updateStatsUI();
-    renderStatsCharts();
-    
-    playBeepSound(400, 0.3, 'sine');
 }
 
 function updateTrackerTick() {
@@ -989,13 +1125,25 @@ function showModal(options) {
 }
 
 function closeModal() {
-    document.getElementById('alert-modal').classList.add('hidden');
-    document.body.classList.remove('fullscreen-warning-flash');
-    stopAlertSiren();
-    
-    // トラッカーをリセット（やりすぎ警告の閉じるボタン ＝ ゲーム終了の意思表示とする）
-    if (AppState.tracker.active) {
-        resetTracker();
+    const performClose = () => {
+        document.getElementById('alert-modal').classList.add('hidden');
+        document.body.classList.remove('fullscreen-warning-flash');
+        stopAlertSiren();
+        
+        // トラッカーをリセット（やりすぎ警告の閉じるボタン ＝ ゲーム終了の意思表示とする）
+        if (AppState.tracker.active) {
+            // ロック確認は終わったので、一時的にフラグを倒してリセットする
+            const backupLock = AppState.security.lockTimerEnabled;
+            AppState.security.lockTimerEnabled = false;
+            resetTracker();
+            AppState.security.lockTimerEnabled = backupLock;
+        }
+    };
+
+    if (AppState.tracker.active && AppState.security.lockTimerEnabled && AppState.security.passcode) {
+        showLockScreen(performClose, "アラートを解除してアプリを終了するには認証が必要です。");
+    } else {
+        performClose();
     }
 }
 
@@ -1395,17 +1543,285 @@ function renderDiagHistoryChart() {
     });
     
     // SVGの中身を組み立ててレンダリング
-    svg.innerHTML = `
-        <defs>
-            <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="var(--neon-blue)" stop-opacity="0.35"></stop>
-                <stop offset="100%" stop-color="var(--neon-blue)" stop-opacity="0.0"></stop>
-            </linearGradient>
-        </defs>
         ${gridLines}
         <polygon class="chart-area" points="${areaPoints.join(' ')}"></polygon>
         <polyline class="chart-line" points="${linePoints.join(' ')}"></polyline>
         ${plotPoints}
         ${xLabels}
     `;
+}
+
+// --- セキュリティ・ロック画面・設定用ロジック ---
+
+function openLockSetupModal() {
+    initAudioContext();
+    const modal = document.getElementById('lock-setup-modal');
+    if (!modal) return;
+    
+    // パスコードが既に設定されているか
+    if (AppState.security.passcode) {
+        // 設定済みなら、設定パネルを表示してテンキー入力エリアは隠す
+        document.getElementById('lock-setup-step1').classList.add('hidden');
+        document.getElementById('lock-options-panel').classList.remove('hidden');
+        
+        // トグルの状態を合わせる
+        const toggleAppLock = document.getElementById('toggle-app-lock');
+        if (toggleAppLock) {
+            toggleAppLock.checked = AppState.security.appLockEnabled;
+        }
+    } else {
+        // 未設定なら、パスコード登録フローを初期起動
+        initPasscodeSetupFlow();
+    }
+    
+    modal.classList.remove('hidden');
+    playBeepSound(600, 0.1, 'sine');
+}
+
+function initPasscodeSetupFlow() {
+    AppState.security.setupStep = 1;
+    AppState.security.tempInput = '';
+    AppState.security.setupTempPasscode = '';
+    
+    document.getElementById('lock-options-panel').classList.add('hidden');
+    document.getElementById('lock-setup-step1').classList.remove('hidden');
+    
+    const textEl = document.getElementById('lock-setup-text');
+    if (textEl) textEl.textContent = '登録する4桁のパスコードを設定してください。';
+    
+    updateSetupDotsDisplay();
+}
+
+function handleSetupNumpadInput(val) {
+    if (val === 'clear') {
+        AppState.security.tempInput = '';
+        updateSetupDotsDisplay();
+        playBeepSound(400, 0.15, 'sine');
+        return;
+    }
+    if (val === 'backspace') {
+        AppState.security.tempInput = AppState.security.tempInput.slice(0, -1);
+        updateSetupDotsDisplay();
+        playBeepSound(500, 0.08, 'sine');
+        return;
+    }
+    
+    // 数字入力
+    if (AppState.security.tempInput.length < 4) {
+        AppState.security.tempInput += val;
+        updateSetupDotsDisplay();
+        playBeepSound(800, 0.08, 'sine');
+    }
+    
+    // 4桁揃ったらステップ判定
+    if (AppState.security.tempInput.length === 4) {
+        setTimeout(() => {
+            if (AppState.security.setupStep === 1) {
+                // 1回目の入力完了 -> 2回目の確認へ
+                AppState.security.setupTempPasscode = AppState.security.tempInput;
+                AppState.security.tempInput = '';
+                AppState.security.setupStep = 2;
+                
+                const textEl = document.getElementById('lock-setup-text');
+                if (textEl) textEl.textContent = '確認のため、もう一度同じパスコードを入力してください。';
+                updateSetupDotsDisplay();
+                playBeepSound(600, 0.1, 'sine');
+            } else if (AppState.security.setupStep === 2) {
+                // 2回目の確認入力完了 -> 一致確認
+                if (AppState.security.tempInput === AppState.security.setupTempPasscode) {
+                    // 一致：登録完了
+                    AppState.security.passcode = AppState.security.tempInput;
+                    AppState.security.setupStep = 0;
+                    saveData();
+                    
+                    // 音と演出
+                    playBeepSound(500, 0.1, 'sine');
+                    setTimeout(() => playBeepSound(750, 0.2, 'sine'), 100);
+                    alert('パスコードを正常に設定しました！');
+                    
+                    // 設定パネルへ遷移
+                    openLockSetupModal();
+                } else {
+                    // 不一致：やり直し
+                    playBeepSound(300, 0.3, 'sawtooth');
+                    alert('パスコードが一致しませんでした。もう一度やり直してください。');
+                    initPasscodeSetupFlow();
+                }
+            }
+        }, 150);
+    }
+}
+
+function updateSetupDotsDisplay() {
+    const dots = document.querySelectorAll('#lock-setup-dots .dot');
+    const len = AppState.security.tempInput.length;
+    dots.forEach((dot, idx) => {
+        if (idx < len) {
+            dot.classList.add('active');
+        } else {
+            dot.classList.remove('active');
+        }
+        dot.classList.remove('error');
+    });
+}
+
+function disablePasscodeLock() {
+    AppState.security.passcode = '';
+    AppState.security.appLockEnabled = false;
+    AppState.security.lockTimerEnabled = false;
+    AppState.security.tempInput = '';
+    AppState.security.setupStep = 0;
+    saveData();
+    
+    // 設定モーダルを閉じる
+    document.getElementById('lock-setup-modal').classList.add('hidden');
+    addLog('system', 'セキュリティ・パスコードロックを無効化しました。');
+    playBeepSound(400, 0.3, 'sine');
+}
+
+// --- ロック画面（全画面パスコード入力）の制御 ---
+
+function showLockScreen(onSuccessCallback, message = '') {
+    initAudioContext();
+    const modal = document.getElementById('lock-screen-modal');
+    if (!modal) return;
+    
+    AppState.security.lockScreenActive = true;
+    AppState.security.tempInput = '';
+    AppState.security.onUnlockCallback = onSuccessCallback;
+    
+    if (message) {
+        document.getElementById('lock-screen-msg').textContent = message;
+    } else {
+        document.getElementById('lock-screen-msg').textContent = 'パスコードを入力してロックを解除してください。';
+    }
+    
+    // 緊急バイパスパネルを閉じた状態にする
+    document.getElementById('bypass-form').classList.add('hidden');
+    document.getElementById('bypass-input').value = '';
+    
+    updateScreenDotsDisplay();
+    modal.classList.remove('hidden');
+    
+    playBeepSound(400, 0.15, 'sine');
+}
+
+function handleScreenNumpadInput(val) {
+    if (!AppState.security.lockScreenActive) return;
+    
+    if (val === 'clear') {
+        AppState.security.tempInput = '';
+        updateScreenDotsDisplay();
+        playBeepSound(400, 0.15, 'sine');
+        return;
+    }
+    if (val === 'backspace') {
+        AppState.security.tempInput = AppState.security.tempInput.slice(0, -1);
+        updateScreenDotsDisplay();
+        playBeepSound(500, 0.08, 'sine');
+        return;
+    }
+    
+    // 数字入力
+    if (AppState.security.tempInput.length < 4) {
+        AppState.security.tempInput += val;
+        updateScreenDotsDisplay();
+        playBeepSound(800, 0.08, 'sine');
+    }
+    
+    // 4桁揃ったらパスコード検証
+    if (AppState.security.tempInput.length === 4) {
+        setTimeout(() => {
+            validatePasscode();
+        }, 150);
+    }
+}
+
+function updateScreenDotsDisplay() {
+    const dots = document.querySelectorAll('#lock-screen-dots .dot');
+    const len = AppState.security.tempInput.length;
+    dots.forEach((dot, idx) => {
+        if (idx < len) {
+            dot.classList.add('active');
+        } else {
+            dot.classList.remove('active');
+        }
+        dot.classList.remove('error');
+    });
+}
+
+function validatePasscode() {
+    const input = AppState.security.tempInput;
+    const target = AppState.security.passcode;
+    
+    if (input === target) {
+        // ロック解除成功
+        AppState.security.lockScreenActive = false;
+        document.getElementById('lock-screen-modal').classList.add('hidden');
+        
+        playBeepSound(500, 0.1, 'sine');
+        setTimeout(() => playBeepSound(800, 0.25, 'sine'), 80);
+        addLog('success', 'セキュリティロックを解除しました。');
+        
+        // コールバックがある場合は実行
+        if (typeof AppState.security.onUnlockCallback === 'function') {
+            AppState.security.onUnlockCallback();
+            AppState.security.onUnlockCallback = null;
+        }
+    } else {
+        // パスコードエラー時の演出
+        playBeepSound(250, 0.35, 'sawtooth');
+        
+        // エラーアニメーション（ドットを赤くして震えさせる）
+        const dots = document.querySelectorAll('#lock-screen-dots .dot');
+        dots.forEach(dot => {
+            dot.classList.add('error');
+        });
+        
+        // 1秒後にリセット
+        setTimeout(() => {
+            AppState.security.tempInput = '';
+            updateScreenDotsDisplay();
+        }, 1000);
+    }
+}
+
+function handleEmergencyBypass() {
+    const inputVal = document.getElementById('bypass-input').value.trim();
+    const targetVal = document.getElementById('bypass-target-phrase').textContent.trim();
+    
+    if (inputVal === targetVal) {
+        // 誓い成立による強制解除
+        AppState.security.lockScreenActive = false;
+        AppState.security.lockTimerEnabled = false; // 解除
+        
+        const checkLockTimer = document.getElementById('check-lock-timer');
+        if (checkLockTimer) {
+            checkLockTimer.checked = false;
+            checkLockTimer.disabled = false;
+        }
+        
+        document.getElementById('lock-screen-modal').classList.add('hidden');
+        
+        // 音響演出
+        playBeepSound(500, 0.15, 'sine');
+        setTimeout(() => playBeepSound(650, 0.15, 'sine'), 120);
+        setTimeout(() => playBeepSound(900, 0.3, 'sine'), 240);
+        
+        addLog('alert', '【緊急解除】誓いの言葉のタイピングによってセキュリティロックが強制解除されました。');
+        
+        // 誓いの言葉入力を隠す
+        document.getElementById('bypass-form').classList.add('hidden');
+        
+        // コールバック実行
+        if (typeof AppState.security.onUnlockCallback === 'function') {
+            AppState.security.onUnlockCallback();
+            AppState.security.onUnlockCallback = null;
+        }
+        
+        alert('誓いが承認されました。ロックを強制解除します。予定を優先してください！');
+    } else {
+        playBeepSound(250, 0.3, 'sawtooth');
+        alert('入力された誓いの言葉が一字一句正確ではありません。句読点（。等）やスペース、変換が完全に一致しているか確認して再度タイピングしてください。');
+    }
 }

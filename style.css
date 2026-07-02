@@ -1476,3 +1476,169 @@ main.app-main {
     }
 }
 
+/* ==========================================================================
+   Passcode Lock & NumPad Styles
+   ========================================================================== */
+.passcode-dots-container {
+    display: flex;
+    justify-content: center;
+    gap: 1.2rem;
+}
+
+.passcode-dots-container .dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--text-secondary);
+    background: transparent;
+    transition: var(--transition);
+}
+
+.passcode-dots-container .dot.active {
+    background: var(--neon-blue);
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 12px var(--neon-blue-glow);
+    transform: scale(1.2);
+}
+
+.passcode-dots-container .dot.error {
+    background: var(--neon-pink);
+    border-color: var(--neon-pink);
+    box-shadow: 0 0 12px var(--neon-pink-glow);
+    animation: shakeDot 0.2s 3 alternate;
+}
+
+@keyframes shakeDot {
+    0% { transform: translateX(-4px); }
+    100% { transform: translateX(4px); }
+}
+
+/* テンキーグリッド */
+.numpad-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    max-width: 280px;
+    margin: 0 auto;
+}
+
+.num-btn {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+    font-family: var(--font-tech);
+    font-size: 1.6rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+    margin: 0 auto;
+    outline: none;
+}
+
+.num-btn:hover {
+    border-color: var(--neon-blue);
+    background: rgba(0, 240, 255, 0.08);
+    box-shadow: 0 0 10px var(--neon-blue-glow);
+    color: var(--neon-blue);
+}
+
+.num-btn:active {
+    transform: scale(0.9);
+}
+
+.num-btn.text-btn {
+    font-family: var(--font-main);
+    font-size: 0.85rem;
+    border-radius: 12px;
+    width: 76px;
+    height: 68px;
+}
+
+.num-btn.text-btn i {
+    font-size: 1.2rem;
+}
+
+/* ロック画面専用 */
+.lock-screen-content {
+    max-width: 420px;
+    background: #090a16;
+    border-color: var(--neon-pink);
+    box-shadow: 0 0 30px rgba(255, 0, 85, 0.2);
+}
+
+/* 緊急バイパス解除 */
+.emergency-bypass-container {
+    margin-top: 1.5rem;
+}
+
+.btn-text {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-family: var(--font-main);
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-decoration: underline;
+    transition: var(--transition);
+}
+
+.btn-text:hover {
+    color: var(--neon-pink);
+}
+
+.bypass-form {
+    animation: fadeIn 0.4s ease;
+}
+
+/* Switch Styles (for settings toggle) */
+.switch-container {
+    display: flex;
+    align-items: center;
+}
+
+/* checkboxを非表示 */
+.switch-container input[type="checkbox"] {
+    display: none;
+}
+
+.switch-slider {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    background-color: rgba(255,255,255,0.1);
+    border-radius: 34px;
+    transition: .4s;
+    margin-right: 0.8rem;
+    border: 1px solid var(--card-border);
+}
+
+.switch-slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: var(--text-secondary);
+    border-radius: 50%;
+    transition: .4s;
+}
+
+input:checked + .switch-slider {
+    background-color: rgba(0, 240, 255, 0.1);
+    border-color: var(--neon-blue);
+}
+
+input:checked + .switch-slider:before {
+    transform: translateX(20px);
+    background-color: var(--neon-blue);
+    box-shadow: 0 0 8px var(--neon-blue-glow);
+}
+
