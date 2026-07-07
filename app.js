@@ -13,7 +13,12 @@ const AppState = {
         limitSeconds: 0,
         elapsedSeconds: 0,
         isOvertime: false,
-        lastOvertimerNotificationTime: 0
+        lastOvertimerNotificationTime: 0,
+        // --- バックグラウンド対応: 実時刻（タイムスタンプ）ベースで経過時間を管理 ---
+        startedAt: null,      // 監視開始時刻 (epoch ms)
+        pausedAt: null,       // 一時停止した時刻 (epoch ms) / 停止中でなければ null
+        totalPausedMs: 0,     // これまでに一時停止していた合計時間
+        wakeLock: null        // Wake Lock APIのハンドル
     },
     // スケジュール一覧
     schedules: [],
@@ -31,6 +36,10 @@ const AppState = {
         scores: [],
         history: []
     },
+    // Service Worker（通知の信頼性向上用）
+    swRegistration: null,
+    // タブが最後にバックグラウンドに回った時刻
+    lastHiddenAt: null,
     // セキュリティ・ロック関連
     security: {
         passcode: '',
@@ -55,7 +64,8 @@ const STORAGE_KEYS = {
     STATS: 'focusguard_stats',
     LOGS: 'focusguard_logs',
     DIAG_HISTORY: 'focusguard_diag_history',
-    SECURITY: 'focusguard_security'
+    SECURITY: 'focusguard_security',
+    TRACKER: 'focusguard_tracker'
 };
 
 const ACTIVITY_LABELS = {
@@ -85,13 +95,17 @@ document.addEventListener('DOMContentLoaded', () => {
 function initApp() {
     // データの読み込み
     loadData();
-    
+
     // イベントリスナーの登録
     setupEventListeners();
-    
+
+    // バックグラウンド対応の各種セットアップ（Service Worker / 画面表示状態の監視など）
+    registerServiceWorker();
+    setupBackgroundHandlers();
+
     // 定期監視ループの開始 (1秒ごと)
     setInterval(backgroundMonitorLoop, 1000);
-    
+
     // UIの初期更新
     updateNotificationButtonUI();
     renderSchedules();
@@ -99,12 +113,167 @@ function initApp() {
     renderStatsCharts();
     renderDiagHistory();
     renderLogs();
-    
+
     addLog('system', 'FocusGuard が正常に起動しました 🛡️');
 
     // アプリ起動時のロック認証判定
     if (AppState.security.appLockEnabled && AppState.security.passcode) {
         showLockScreen(null, "アプリ起動ロック");
+    }
+
+    // 前回、監視中のままタブが閉じられていた場合は状態を復元する
+    resumeTrackerIfActive();
+}
+
+// --- バックグラウンド対応: Service Worker 登録 ---
+function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('sw.js')
+        .then(registration => {
+            AppState.swRegistration = registration;
+        })
+        .catch(e => {
+            console.warn('Service Workerの登録に失敗しました（通知は通常方式で送信されます）', e);
+        });
+}
+
+// --- バックグラウンド対応: 画面の表示/非表示・終了時のハンドラ ---
+function setupBackgroundHandlers() {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // タブを閉じる/リロードする直前に、確実に現在の状態を保存する
+    window.addEventListener('pagehide', () => saveData());
+    window.addEventListener('beforeunload', () => saveData());
+}
+
+function handleVisibilityChange() {
+    if (document.hidden) {
+        // バックグラウンドに回った瞬間の状態を保存（ブラウザに強制終了されても復元できるように）
+        AppState.lastHiddenAt = Date.now();
+        saveTrackerState();
+    } else {
+        // フォアグラウンドに復帰：バックグラウンド中にtickが間引かれていた分を即座に追いつかせる
+        document.title = 'FocusGuard 🛡️ | スマホやりすぎ防止＆スケジュール連携';
+
+        if (AppState.tracker.active && !AppState.tracker.paused) {
+            updateTrackerTick();
+            requestWakeLock(); // Wake Lockは非表示になると自動解除されるため再取得
+        }
+
+        backgroundMonitorLoop();
+    }
+}
+
+// アプリ起動時に、前回監視中だったトラッカーを復元する
+function resumeTrackerIfActive() {
+    if (!AppState.tracker.active) return;
+
+    const total = AppState.tracker.limitSeconds;
+    AppState.tracker.elapsedSeconds = computeElapsedSeconds();
+    const wasOvertimeAlready = AppState.tracker.isOvertime;
+
+    addLog('system', `前回のセッション（${ACTIVITY_LABELS[AppState.tracker.activity] || AppState.tracker.activity}）の監視をバックグラウンドから復元しました。`);
+
+    // UIをトラッキング中の状態に戻す
+    const btnStart = document.getElementById('btn-start-tracker');
+    const btnStop = document.getElementById('btn-stop-tracker');
+    const btnReset = document.getElementById('btn-reset-tracker');
+    const selectActivity = document.getElementById('select-activity');
+    const inputLimitTime = document.getElementById('input-limit-time');
+    const checkLockTimer = document.getElementById('check-lock-timer');
+    const statusBadge = document.getElementById('tracker-status-badge');
+
+    if (btnStart) btnStart.classList.add('hidden');
+    if (btnReset) btnReset.classList.remove('hidden');
+    if (selectActivity) { selectActivity.value = AppState.tracker.activity; selectActivity.disabled = true; }
+    if (inputLimitTime) { inputLimitTime.value = Math.round(total / 60); inputLimitTime.disabled = true; }
+    document.querySelectorAll('.btn-preset').forEach(b => b.disabled = true);
+    if (checkLockTimer) {
+        checkLockTimer.checked = !!AppState.security.lockTimerEnabled;
+        checkLockTimer.disabled = true;
+    }
+
+    if (statusBadge) {
+        statusBadge.classList.remove('hidden');
+        statusBadge.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> ${ACTIVITY_LABELS[AppState.tracker.activity]} 監視中`;
+    }
+    const bgIndicator = document.getElementById('tracker-bg-indicator');
+    if (bgIndicator) bgIndicator.classList.remove('hidden');
+
+    if (AppState.tracker.paused) {
+        if (btnStop) {
+            btnStop.classList.remove('hidden');
+            btnStop.innerHTML = '<i class="fa-solid fa-play"></i> 再開';
+            btnStop.className = 'btn btn-primary btn-block';
+        }
+    } else {
+        if (btnStop) {
+            btnStop.classList.remove('hidden');
+            btnStop.innerHTML = '<i class="fa-solid fa-pause"></i> 一時停止';
+            btnStop.className = 'btn btn-secondary btn-block';
+        }
+        if (AppState.tracker.timerId) clearInterval(AppState.tracker.timerId);
+        AppState.tracker.timerId = setInterval(updateTrackerTick, 1000);
+        requestWakeLock();
+    }
+
+    updateTimerDisplay(Math.max(0, total - AppState.tracker.elapsedSeconds), total);
+
+    // タブが閉じられている間に制限時間を超過していた場合、復帰した瞬間に警告を出す
+    if (AppState.tracker.elapsedSeconds >= total && !wasOvertimeAlready) {
+        AppState.tracker.isOvertime = true;
+        AppState.stats.alertCount++;
+        saveData();
+        updateStatsUI();
+        updateAppBadge();
+        addLog('alert', `【警告】バックグラウンドで監視中に ${ACTIVITY_LABELS[AppState.tracker.activity]} の制限時間を超過していました！`);
+        triggerOvertimeWarning();
+    } else if (AppState.tracker.isOvertime) {
+        document.querySelector('.tracker-display').className = 'card glass tracker-display state-danger';
+        document.getElementById('timer-label').textContent = 'OVERTIME';
+        updateAppBadge();
+    }
+
+    saveTrackerState();
+}
+
+// --- バックグラウンド対応: Wake Lock（監視中は画面を消灯させない） ---
+async function requestWakeLock() {
+    if (!('wakeLock' in navigator) || AppState.tracker.wakeLock) return;
+    try {
+        AppState.tracker.wakeLock = await navigator.wakeLock.request('screen');
+        AppState.tracker.wakeLock.addEventListener('release', () => {
+            AppState.tracker.wakeLock = null;
+        });
+    } catch (e) {
+        // ユーザー操作外や非対応環境では取得に失敗することがあるが、致命的ではないので握りつぶす
+        console.warn('Wake Lockの取得に失敗しました', e);
+    }
+}
+
+function releaseWakeLock() {
+    if (AppState.tracker.wakeLock) {
+        AppState.tracker.wakeLock.release().catch(() => {});
+        AppState.tracker.wakeLock = null;
+    }
+}
+
+// --- バックグラウンド対応: Badging API（タブを見ていなくても超過をアイコンで知らせる） ---
+function updateAppBadge() {
+    if (!('setAppBadge' in navigator)) return;
+    try {
+        if (AppState.tracker.isOvertime) {
+            navigator.setAppBadge(1);
+        } else {
+            navigator.clearAppBadge();
+        }
+    } catch (e) { /* 非対応環境は無視 */ }
+}
+
+function clearAppBadge() {
+    if ('clearAppBadge' in navigator) {
+        navigator.clearAppBadge().catch(() => {});
     }
 }
 
@@ -137,6 +306,13 @@ function loadData() {
         if (storedSecurity) {
             AppState.security = {...AppState.security, ...JSON.parse(storedSecurity)};
         }
+
+        // バックグラウンド対応：前回のトラッカー状態を復元（タブを閉じても監視が継続していたことにする）
+        const storedTracker = localStorage.getItem(STORAGE_KEYS.TRACKER);
+        if (storedTracker) {
+            const parsedTracker = JSON.parse(storedTracker);
+            AppState.tracker = {...AppState.tracker, ...parsedTracker, timerId: null, wakeLock: null};
+        }
     } catch (e) {
         console.error('データの読み込み中にエラーが発生しました', e);
         resetStats();
@@ -156,9 +332,50 @@ function saveData() {
             appLockEnabled: AppState.security.appLockEnabled
         };
         localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(securityToSave));
+
+        saveTrackerState();
     } catch (e) {
         console.error('データの保存中にエラーが発生しました', e);
     }
+}
+
+// トラッカーの状態だけを保存（タブが閉じられても・再起動しても続きから復元できるようにする）
+function saveTrackerState() {
+    try {
+        const trackerToSave = {
+            active: AppState.tracker.active,
+            paused: AppState.tracker.paused,
+            activity: AppState.tracker.activity,
+            limitSeconds: AppState.tracker.limitSeconds,
+            elapsedSeconds: AppState.tracker.elapsedSeconds,
+            isOvertime: AppState.tracker.isOvertime,
+            lastOvertimerNotificationTime: AppState.tracker.lastOvertimerNotificationTime,
+            startedAt: AppState.tracker.startedAt,
+            pausedAt: AppState.tracker.pausedAt,
+            totalPausedMs: AppState.tracker.totalPausedMs,
+            lockTimerEnabled: AppState.security.lockTimerEnabled
+        };
+        localStorage.setItem(STORAGE_KEYS.TRACKER, JSON.stringify(trackerToSave));
+    } catch (e) {
+        console.error('トラッカー状態の保存中にエラーが発生しました', e);
+    }
+}
+
+function clearTrackerState() {
+    localStorage.removeItem(STORAGE_KEYS.TRACKER);
+}
+
+// 実時刻ベースで経過秒数を算出する（バックグラウンドでtickが間引かれても正確な値になる）
+function computeElapsedSeconds() {
+    if (!AppState.tracker.active || !AppState.tracker.startedAt) return AppState.tracker.elapsedSeconds || 0;
+
+    const now = Date.now();
+    let pausedMs = AppState.tracker.totalPausedMs || 0;
+    if (AppState.tracker.paused && AppState.tracker.pausedAt) {
+        pausedMs += (now - AppState.tracker.pausedAt);
+    }
+
+    return Math.max(0, Math.floor((now - AppState.tracker.startedAt - pausedMs) / 1000));
 }
 
 function resetStats() {
@@ -506,12 +723,19 @@ function updateNotificationButtonUI() {
 }
 
 function sendNotification(title, options) {
-    if ('Notification' in window && Notification.permission === 'granted') {
-        try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+    try {
+        // Service Worker経由の通知は、タブがバックグラウンドでもより確実に表示される
+        if (AppState.swRegistration && AppState.swRegistration.showNotification) {
+            AppState.swRegistration.showNotification(title, options);
+        } else {
             new Notification(title, options);
-        } catch (e) {
-            console.error('通知の送信に失敗しました', e);
         }
+    } catch (e) {
+        console.error('通知の送信に失敗しました', e);
+        // Service Worker経由が失敗した場合は通常のNotification APIにフォールバック
+        try { new Notification(title, options); } catch (e2) { /* 何もできない */ }
     }
 }
 
@@ -607,7 +831,16 @@ function startTracker() {
     AppState.tracker.active = true;
     AppState.tracker.paused = false;
     AppState.tracker.isOvertime = false;
-    
+
+    // バックグラウンド対応：実時刻を基準に経過時間を計算する
+    AppState.tracker.startedAt = Date.now();
+    AppState.tracker.pausedAt = null;
+    AppState.tracker.totalPausedMs = 0;
+    AppState.tracker.lastOvertimerNotificationTime = 0;
+
+    requestWakeLock();
+    saveTrackerState();
+
     // UIの制御
     document.getElementById('btn-start-tracker').classList.add('hidden');
     document.getElementById('btn-stop-tracker').classList.remove('hidden');
@@ -620,7 +853,10 @@ function startTracker() {
     const statusBadge = document.getElementById('tracker-status-badge');
     statusBadge.classList.remove('hidden');
     statusBadge.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> ${ACTIVITY_LABELS[activity]} 監視中`;
-    
+
+    const bgIndicator = document.getElementById('tracker-bg-indicator');
+    if (bgIndicator) bgIndicator.classList.remove('hidden');
+
     // タイマーループの開始
     if (AppState.tracker.timerId) clearInterval(AppState.tracker.timerId);
     AppState.tracker.timerId = setInterval(updateTrackerTick, 1000);
@@ -649,19 +885,27 @@ function togglePauseTracker() {
         
         if (AppState.tracker.paused) {
             // 再開
+            if (AppState.tracker.pausedAt) {
+                AppState.tracker.totalPausedMs += (Date.now() - AppState.tracker.pausedAt);
+                AppState.tracker.pausedAt = null;
+            }
             AppState.tracker.paused = false;
             btnStop.innerHTML = '<i class="fa-solid fa-pause"></i> 一時停止';
             btnStop.className = 'btn btn-secondary btn-block';
             addLog('system', '監視を再開しました。');
             playBeepSound(800, 0.1, 'sine');
+            requestWakeLock();
         } else {
             // 一時停止
             AppState.tracker.paused = true;
+            AppState.tracker.pausedAt = Date.now();
             btnStop.innerHTML = '<i class="fa-solid fa-play"></i> 再開';
             btnStop.className = 'btn btn-primary btn-block';
             addLog('system', '監視を一時停止しました。');
             playBeepSound(500, 0.1, 'sine');
+            releaseWakeLock();
         }
+        saveTrackerState();
     };
 
     if (AppState.security.lockTimerEnabled && AppState.security.passcode) {
@@ -694,11 +938,19 @@ function resetTracker() {
         }
         
         stopAlertSiren();
-        
+        releaseWakeLock();
+        clearAppBadge();
+
         // 状態クリア
         AppState.tracker.active = false;
         AppState.tracker.paused = false;
         AppState.tracker.isOvertime = false;
+        AppState.tracker.startedAt = null;
+        AppState.tracker.pausedAt = null;
+        AppState.tracker.totalPausedMs = 0;
+        AppState.tracker.elapsedSeconds = 0;
+        document.title = 'FocusGuard 🛡️ | スマホやりすぎ防止＆スケジュール連携';
+        clearTrackerState();
         AppState.security.lockTimerEnabled = false; // 解除
         
         const checkLockTimer = document.getElementById('check-lock-timer');
@@ -716,7 +968,9 @@ function resetTracker() {
         document.querySelectorAll('.btn-preset').forEach(b => b.disabled = false);
         
         document.getElementById('tracker-status-badge').classList.add('hidden');
-        
+        const bgIndicatorEl = document.getElementById('tracker-bg-indicator');
+        if (bgIndicatorEl) bgIndicatorEl.classList.add('hidden');
+
         const displayCard = document.querySelector('.tracker-display');
         displayCard.className = 'card glass tracker-display';
         
@@ -744,9 +998,11 @@ function resetTracker() {
 
 function updateTrackerTick() {
     if (!AppState.tracker.active || AppState.tracker.paused) return;
-    
-    AppState.tracker.elapsedSeconds++;
-    
+
+    // タイムスタンプとの差分から再計算するため、バックグラウンドでtickが
+    // 間引かれたり止まったりしても、フォアグラウンドに戻った瞬間に正しい値へ復帰する
+    AppState.tracker.elapsedSeconds = computeElapsedSeconds();
+
     const total = AppState.tracker.limitSeconds;
     const elapsed = AppState.tracker.elapsedSeconds;
     const remaining = Math.max(0, total - elapsed);
@@ -764,9 +1020,10 @@ function updateTrackerTick() {
             AppState.stats.alertCount++;
             saveData();
             updateStatsUI();
-            
+            updateAppBadge();
+
             addLog('alert', `【警告】 ${ACTIVITY_LABELS[AppState.tracker.activity]} の制限時間を超過しました！`);
-            
+
             // 強力警告の発動
             triggerOvertimeWarning();
         } else {
@@ -805,6 +1062,30 @@ function updateTrackerTick() {
         // ------------------ 【通常状態】 ------------------
         displayCard.className = 'card glass tracker-display';
         timerLabel.textContent = 'MONITORING';
+    }
+
+    // タブが非表示（バックグラウンド）の間はタブタイトルに残り時間を表示し、
+    // タブを開かなくても状況が分かるようにする
+    updateBackgroundTitle(remaining, elapsed, total);
+
+    // 数秒おきにトラッカー状態を保存し、途中でブラウザが終了しても復元できるようにする
+    if (elapsed % 5 === 0) {
+        saveTrackerState();
+    }
+}
+
+// バックグラウンド時のタブタイトル更新
+function updateBackgroundTitle(remaining, elapsed, total) {
+    if (!document.hidden) return;
+
+    if (AppState.tracker.isOvertime) {
+        const overMin = Math.floor((elapsed - total) / 60);
+        const overSec = (elapsed - total) % 60;
+        document.title = `🚨 ${String(overMin).padStart(2, '0')}:${String(overSec).padStart(2, '0')} 超過中！ - FocusGuard`;
+    } else {
+        const mm = Math.floor(remaining / 60);
+        const ss = remaining % 60;
+        document.title = `⏳ ${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')} 残り - FocusGuard`;
     }
 }
 
@@ -1543,6 +1824,7 @@ function renderDiagHistoryChart() {
     });
     
     // SVGの中身を組み立ててレンダリング
+    svg.innerHTML = `
         ${gridLines}
         <polygon class="chart-area" points="${areaPoints.join(' ')}"></polygon>
         <polyline class="chart-line" points="${linePoints.join(' ')}"></polyline>
