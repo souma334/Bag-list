@@ -50,10 +50,11 @@ const AppState = {
         setupStep: 0, // 0:設定メニュー, 1:1回目入力, 2:確認入力
         setupTempPasscode: '',
         onUnlockCallback: null,
-        // --- 休載措置（緊急誓約解除時のクールダウン） ---
-        cooldownUntil: null,          // 休載措置の解除予定時刻 (epoch ms) / 非アクティブなら null
-        cooldownDurationMinutes: 60,  // 休載措置の長さ（分）。設定画面で変更可能
-        cooldownIntervalId: null      // カウントダウン表示更新用のタイマーID
+        // --- 救済措置（緊急誓約解除時のクールダウン） ---
+        cooldownUntil: null,          // 救済措置の解除予定時刻 (epoch ms) / 非アクティブなら null
+        cooldownDurationMinutes: 60,  // 救済措置の基本の長さ（分）。設定画面で変更可能
+        cooldownIntervalId: null,     // カウントダウン表示更新用のタイマーID
+        bypassCount: 0                // これまでに誓約バイパス（救済措置）を使った回数。使うたびに時間がエスカレーションする
     },
     // イベントログ
     logs: [],
@@ -121,7 +122,7 @@ function initApp() {
     addLog('system', 'FocusGuard が正常に起動しました 🛡️');
 
     // アプリ起動時のロック認証判定
-    // 休載措置（クールダウン）が有効な場合は、通常のパスコードロックより優先して表示し、
+    // 救済措置（クールダウン）が有効な場合は、通常のパスコードロックより優先して表示し、
     // パスコードが分かっていても待機時間が終わるまでは利用させない
     if (isInCooldown()) {
         showCooldownScreen();
@@ -339,7 +340,8 @@ function saveData() {
             passcode: AppState.security.passcode,
             appLockEnabled: AppState.security.appLockEnabled,
             cooldownUntil: AppState.security.cooldownUntil,
-            cooldownDurationMinutes: AppState.security.cooldownDurationMinutes
+            cooldownDurationMinutes: AppState.security.cooldownDurationMinutes,
+            bypassCount: AppState.security.bypassCount
         };
         localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(securityToSave));
 
@@ -555,7 +557,7 @@ function setupEventListeners() {
         });
     }
 
-    // 休載措置（緊急誓約解除時のクールダウン）時間の設定
+    // 救済措置（緊急誓約解除時のクールダウン）時間の設定
     const selectCooldownDuration = document.getElementById('select-cooldown-duration');
     if (selectCooldownDuration) {
         selectCooldownDuration.addEventListener('change', (e) => {
@@ -563,7 +565,22 @@ function setupEventListeners() {
             AppState.security.cooldownDurationMinutes = minutes;
             saveData();
             updateBypassCooldownLabel();
-            addLog('system', `休載措置（緊急解除ペナルティ）の時間を ${minutes} 分に設定しました。`);
+            updateEscalationStatusUI();
+            addLog('system', `救済措置（緊急解除ペナルティ）の時間を ${minutes} 分に設定しました。`);
+        });
+    }
+
+    // 救済措置のエスカレーション（誓約バイパス使用回数）をリセットする
+    const btnResetBypassCount = document.getElementById('btn-reset-bypass-count');
+    if (btnResetBypassCount) {
+        btnResetBypassCount.addEventListener('click', () => {
+            if (confirm('誓約バイパスの使用回数をリセットしますか？次回のバイパス時間は基本時間（現在の設定値）に戻ります。')) {
+                AppState.security.bypassCount = 0;
+                saveData();
+                updateEscalationStatusUI();
+                updateBypassCooldownLabel();
+                addLog('system', '救済措置のエスカレーション回数をリセットしました。');
+            }
         });
     }
 
@@ -1301,8 +1318,8 @@ function deleteSchedule(id) {
 function backgroundMonitorLoop() {
     const now = new Date();
 
-    // ------------------ 【0. 休載措置（クールダウン）の状態同期】 ------------------
-    // 他タブでの操作やページ再読み込みがあっても、休載中は必ずブロック画面を維持する
+    // ------------------ 【0. 救済措置（クールダウン）の状態同期】 ------------------
+    // 他タブでの操作やページ再読み込みがあっても、救済措置中は必ずブロック画面を維持する
     const cooldownModal = document.getElementById('cooldown-lock-modal');
     const cooldownModalVisible = cooldownModal && !cooldownModal.classList.contains('hidden');
     if (isInCooldown() && !cooldownModalVisible) {
@@ -1867,11 +1884,30 @@ function renderDiagHistoryChart() {
 
 // --- セキュリティ・ロック画面・設定用ロジック ---
 
-// ロック画面の誓約フォームに表示する「休載時間（分）」のラベルを最新の設定値に合わせる
+// ロック画面の誓約フォームに表示する「救済措置の時間（分）」のラベルを、
+// 次に使った場合にエスカレーションされる時間で更新する
 function updateBypassCooldownLabel() {
     const label = document.getElementById('bypass-cooldown-minutes-label');
     if (label) {
-        label.textContent = String(AppState.security.cooldownDurationMinutes || 60);
+        const nextMinutes = computeEscalatedCooldownMinutes(AppState.security.bypassCount || 0);
+        label.textContent = String(nextMinutes);
+    }
+
+    const countLabel = document.getElementById('bypass-count-label');
+    if (countLabel) {
+        countLabel.textContent = String(AppState.security.bypassCount || 0);
+    }
+}
+
+// 設定パネル内の「これまでの使用回数」「次回のエスカレーション時間」表示を更新する
+function updateEscalationStatusUI() {
+    const countLabel = document.getElementById('setup-bypass-count-label');
+    if (countLabel) {
+        countLabel.textContent = String(AppState.security.bypassCount || 0);
+    }
+    const nextLabel = document.getElementById('setup-next-cooldown-label');
+    if (nextLabel) {
+        nextLabel.textContent = String(computeEscalatedCooldownMinutes(AppState.security.bypassCount || 0));
     }
 }
 
@@ -1892,12 +1928,13 @@ function openLockSetupModal() {
             toggleAppLock.checked = AppState.security.appLockEnabled;
         }
 
-        // 休載措置の時間設定を反映
+        // 救済措置の時間設定を反映
         const selectCooldown = document.getElementById('select-cooldown-duration');
         if (selectCooldown) {
             selectCooldown.value = String(AppState.security.cooldownDurationMinutes || 60);
         }
         updateBypassCooldownLabel();
+        updateEscalationStatusUI();
     } else {
         // 未設定なら、パスコード登録フローを初期起動
         initPasscodeSetupFlow();
@@ -2121,12 +2158,15 @@ function handleEmergencyBypass() {
     const targetVal = document.getElementById('bypass-target-phrase').textContent.trim();
     
     if (inputVal === targetVal) {
-        // 誓い成立：ただし即座に解除はせず「休載措置」としてクールダウンを開始する
-        const cooldownMinutes = AppState.security.cooldownDurationMinutes || 60;
+        // 誓い成立：ただし即座に解除はせず「救済措置」としてクールダウンを開始する
+        // 使用回数に応じて時間をエスカレーション（倍増）させ、安易な多用を抑止する
+        const usedCountBeforeThisTime = AppState.security.bypassCount || 0;
+        const escalatedMinutes = computeEscalatedCooldownMinutes(usedCountBeforeThisTime);
 
         AppState.security.lockScreenActive = false;
         AppState.security.lockTimerEnabled = false; // トラッカーの解除制限は解く
-        AppState.security.cooldownUntil = Date.now() + cooldownMinutes * 60 * 1000;
+        AppState.security.cooldownUntil = Date.now() + escalatedMinutes * 60 * 1000;
+        AppState.security.bypassCount = usedCountBeforeThisTime + 1;
         AppState.security.onUnlockCallback = null; // 通常のアプリ画面へは戻さない
 
         const checkLockTimer = document.getElementById('check-lock-timer');
@@ -2145,11 +2185,11 @@ function handleEmergencyBypass() {
         playBeepSound(300, 0.2, 'sine');
         setTimeout(() => playBeepSound(220, 0.3, 'sine'), 180);
 
-        addLog('alert', `【緊急解除】誓いの言葉のタイピングによりロックは解除されましたが、休載措置として ${cooldownMinutes} 分間アプリの利用が制限されます。`);
+        addLog('alert', `【緊急解除】誓いの言葉のタイピングによりロックは解除されましたが、救済措置として ${escalatedMinutes} 分間アプリの利用が制限されます。（累計使用回数: ${AppState.security.bypassCount}回目）`);
 
-        alert(`誓いが承認されました。ただし、パスコード忘却時のペナルティとして ${cooldownMinutes} 分間、アプリを利用できない「休載措置」に入ります。この時間が経過するまでお待ちください。`);
+        alert(`誓いが承認されました。ただし、パスコード忘却時のペナルティとして ${escalatedMinutes} 分間、アプリを利用できない「救済措置」に入ります。\n\n今回で ${AppState.security.bypassCount} 回目の使用のため、時間が通常より長く設定されています。使うたびにさらに長くなりますのでご注意ください。`);
 
-        // 通常画面には戻さず、休載措置（クールダウン）画面を表示する
+        // 通常画面には戻さず、救済措置（クールダウン）画面を表示する
         showCooldownScreen();
     } else {
         playBeepSound(250, 0.3, 'sawtooth');
@@ -2157,14 +2197,24 @@ function handleEmergencyBypass() {
     }
 }
 
-// --- 休載措置（緊急誓約解除後のクールダウン）関連 ---
+// 救済措置の「エスカレーション」時間を計算する
+// 使用回数(usedCount: これまでに使った回数、0回目=初回)に応じて基本時間を倍々にしていく
+// 際限なく伸び続けないよう、上限（デフォルト24時間）でキャップする
+const COOLDOWN_ESCALATION_CAP_MINUTES = 24 * 60; // 24時間を上限とする
+function computeEscalatedCooldownMinutes(usedCount) {
+    const baseMinutes = AppState.security.cooldownDurationMinutes || 60;
+    const multiplier = Math.pow(2, Math.max(0, usedCount)); // 1回目:x1, 2回目:x2, 3回目:x4, 4回目:x8 ...
+    return Math.min(baseMinutes * multiplier, COOLDOWN_ESCALATION_CAP_MINUTES);
+}
 
-// 現在、休載措置（クールダウン）中かどうかを判定する
+// --- 救済措置（緊急誓約解除後のクールダウン）関連 ---
+
+// 現在、救済措置（クールダウン）中かどうかを判定する
 function isInCooldown() {
     return !!AppState.security.cooldownUntil && Date.now() < AppState.security.cooldownUntil;
 }
 
-// 休載措置の残り時間を "HH:MM:SS" 形式にフォーマットする
+// 救済措置の残り時間を "HH:MM:SS" 形式にフォーマットする
 function formatCooldownRemaining(ms) {
     const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
     const h = Math.floor(totalSeconds / 3600);
@@ -2173,7 +2223,7 @@ function formatCooldownRemaining(ms) {
     return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
 }
 
-// 休載措置（クールダウン）の全画面ブロック表示を開始する
+// 救済措置（クールダウン）の全画面ブロック表示を開始する
 function showCooldownScreen() {
     const modal = document.getElementById('cooldown-lock-modal');
     if (!modal) return;
@@ -2193,7 +2243,7 @@ function showCooldownScreen() {
     AppState.security.cooldownIntervalId = setInterval(updateCooldownCountdown, 1000);
 }
 
-// 休載措置の表示を閉じ、内部状態をクリアする
+// 救済措置の表示を閉じ、内部状態をクリアする
 function hideCooldownScreen() {
     const modal = document.getElementById('cooldown-lock-modal');
     if (modal) modal.classList.add('hidden');
@@ -2210,7 +2260,7 @@ function hideCooldownScreen() {
 // カウントダウン表示・進捗バーの更新、および終了判定
 function updateCooldownCountdown() {
     if (!isInCooldown()) {
-        // 休載措置が終了していた場合
+        // 救済措置が終了していた場合
         const wasShown = document.getElementById('cooldown-lock-modal') &&
             !document.getElementById('cooldown-lock-modal').classList.contains('hidden');
 
@@ -2219,8 +2269,8 @@ function updateCooldownCountdown() {
         if (wasShown) {
             playBeepSound(500, 0.12, 'sine');
             setTimeout(() => playBeepSound(750, 0.25, 'sine'), 100);
-            addLog('success', '休載措置の待機時間が経過しました。アプリの利用が再開できます。');
-            alert('休載措置の時間が経過しました。次からは予定を優先して、スマホの利用時間を見直しましょう！');
+            addLog('success', '救済措置の待機時間が経過しました。アプリの利用が再開できます。');
+            alert('救済措置の時間が経過しました。次からは予定を優先して、スマホの利用時間を見直しましょう！');
         }
         return;
     }

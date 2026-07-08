@@ -448,7 +448,7 @@
 
                     <div class="cooldown-setting-box" style="background: rgba(255, 170, 0, 0.05); border: 1px dashed var(--neon-yellow); border-radius: 12px; padding: 1rem; margin-top: 0.5rem;">
                         <label for="select-cooldown-duration" style="display: block; font-weight: 700; font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--neon-yellow);">
-                            <i class="fa-solid fa-hourglass-half"></i> パスコード忘却時の休載措置（クールダウン）
+                            <i class="fa-solid fa-hourglass-half"></i> パスコード忘却時の救済措置（クールダウン）
                         </label>
                         <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.7rem;">
                             「誓いの言葉」で緊急解除した場合、パスコードによる即時ロック解除は行わず、以下で設定した時間だけアプリの利用を強制的に停止します。
@@ -460,6 +460,18 @@
                             <option value="180">3時間</option>
                             <option value="360">6時間</option>
                         </select>
+
+                        <div style="margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px dashed rgba(255, 170, 0, 0.3); font-size: 0.82rem; color: var(--text-secondary); line-height: 1.6;">
+                            <i class="fa-solid fa-clock-rotate-left"></i> これまでの誓約バイパス使用回数：
+                            <strong id="setup-bypass-count-label" style="color: var(--neon-yellow);">0</strong> 回
+                            <br>
+                            <i class="fa-solid fa-arrow-trend-up"></i> 次に使った場合の救済措置時間：
+                            <strong id="setup-next-cooldown-label" style="color: var(--neon-yellow);">60</strong> 分
+                            <span style="display:block; margin-top: 0.3rem; opacity: 0.85;">（使うたびに時間が倍増します。24時間で上限に達します）</span>
+                        </div>
+                        <button id="btn-reset-bypass-count" class="btn btn-outline btn-block" style="margin-top: 0.8rem; font-size: 0.8rem; padding: 0.5rem;">
+                            <i class="fa-solid fa-rotate-left"></i> エスカレーションをリセットする（回数を0に戻す）
+                        </button>
                     </div>
 
                     <button id="btn-change-passcode" class="btn btn-outline btn-block" style="margin-top: 1rem;">
@@ -521,10 +533,10 @@
                     <div id="bypass-form" class="bypass-form hidden" style="margin-top: 1rem; text-align: left; background: rgba(255, 0, 85, 0.03); border: 1px dashed var(--neon-pink); border-radius: 12px; padding: 1rem;">
                         <p class="bypass-warning" style="font-size: 0.85rem; color: var(--neon-pink); font-weight: 700; margin-bottom: 0.5rem;"><i class="fa-solid fa-circle-info"></i> 【緊急ペナルティ】以下の誓いの言葉を完璧にタイピングしてください。</p>
                         <blockquote id="bypass-target-phrase" style="font-size: 0.9rem; color: var(--text-primary); background: rgba(0,0,0,0.2); padding: 0.6rem; border-radius: 6px; font-weight: 600; margin-bottom: 0.8rem; border-left: 3px solid var(--neon-pink);">私は絶対にスマホ依存に負けず自分の予定を最優先にします。</blockquote>
-                        <p id="bypass-cooldown-notice" style="font-size: 0.78rem; color: var(--neon-yellow); margin-bottom: 0.8rem;"><i class="fa-solid fa-hourglass-half"></i> ※誓いが承認されても即座には解除されず、設定された休載時間（<span id="bypass-cooldown-minutes-label">60</span>分）が経過するまでアプリを利用できなくなります。</p>
+                        <p id="bypass-cooldown-notice" style="font-size: 0.78rem; color: var(--neon-yellow); margin-bottom: 0.8rem;"><i class="fa-solid fa-hourglass-half"></i> ※誓いが承認されても即座には解除されず、救済措置として <span id="bypass-cooldown-minutes-label">60</span>分間アプリを利用できなくなります。これまでの使用回数（<span id="bypass-count-label">0</span>回）に応じて時間は倍増していきます。</p>
                         <textarea id="bypass-input" placeholder="上の文章を一字一句違わず正確に入力してください（句読点含む）..." rows="2" style="width:100%; background:rgba(0,0,0,0.4); color:white; border:1px solid var(--card-border); border-radius:8px; padding:0.6rem; font-family:var(--font-main); font-size:0.9rem; outline:none; resize:none; margin-bottom:0.8rem;"></textarea>
                         <div class="bypass-actions">
-                            <button id="btn-submit-bypass" class="btn btn-warning btn-block" style="font-size: 0.85rem;">誓いを立てて休載措置を受け入れる</button>
+                            <button id="btn-submit-bypass" class="btn btn-warning btn-block" style="font-size: 0.85rem;">誓いを立てて救済措置を受け入れる</button>
                         </div>
                     </div>
                 </div>
@@ -532,13 +544,13 @@
         </div>
     </div>
 
-    <!-- =============== モーダル: 休載措置（緊急解除ペナルティ・クールダウン）画面 =============== -->
+    <!-- =============== モーダル: 救済措置（緊急解除ペナルティ・クールダウン）画面 =============== -->
     <div id="cooldown-lock-modal" class="modal-backdrop hidden" style="z-index: 2100;">
         <div class="modal-content cooldown-screen-content text-center">
             <div class="warning-icon-container" style="background: rgba(255, 170, 0, 0.1); border-color: rgba(255, 170, 0, 0.25); margin: 0 auto 1rem;">
                 <i class="fa-solid fa-hourglass-half" style="font-size: 2.2rem; color: var(--neon-yellow); text-shadow: 0 0 10px var(--neon-yellow-glow);"></i>
             </div>
-            <h2 style="font-family: var(--font-tech); font-weight: 900; letter-spacing: 1px; color: var(--neon-yellow);">休載措置中</h2>
+            <h2 style="font-family: var(--font-tech); font-weight: 900; letter-spacing: 1px; color: var(--neon-yellow);">救済措置中</h2>
             <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.3rem;">緊急誓約による解除を行ったため、一定時間アプリの利用が制限されています。</p>
 
             <div class="cooldown-timer-display" id="cooldown-countdown-display">00:00:00</div>
