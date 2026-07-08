@@ -1658,3 +1658,53 @@ input:checked + .switch-slider:before {
     box-shadow: 0 0 8px var(--neon-blue-glow);
 }
 
+/* ==========================================================================
+   休載措置（緊急解除ペナルティ・クールダウン）画面
+   ========================================================================== */
+.cooldown-screen-content {
+    max-width: 440px;
+    background: #0f0d05;
+    border-color: var(--neon-yellow);
+    box-shadow: 0 0 30px rgba(255, 170, 0, 0.25);
+    animation: pulse-border-yellow 2.4s infinite alternate;
+}
+
+.cooldown-timer-display {
+    font-family: var(--font-tech);
+    font-weight: 900;
+    font-size: 3rem;
+    letter-spacing: 2px;
+    color: var(--neon-yellow);
+    text-shadow: 0 0 15px var(--neon-yellow-glow);
+    margin: 1.2rem 0;
+}
+
+.cooldown-desc-box {
+    background: rgba(255, 170, 0, 0.05);
+    border: 1px dashed var(--neon-yellow);
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: left;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-top: 1rem;
+}
+
+.cooldown-progress-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 1.2rem;
+}
+
+.cooldown-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--neon-yellow), #ff8800);
+    box-shadow: 0 0 10px var(--neon-yellow-glow);
+    transition: width 1s linear;
+    width: 100%;
+}
+
